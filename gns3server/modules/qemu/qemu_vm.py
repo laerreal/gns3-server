@@ -843,6 +843,66 @@ class QemuVM(BaseVM):
                 self._process = None
         return False
 
+
+    @asyncio.coroutine
+    def start_capture(self, adapter_number, output_file):
+        """
+        Starts a packet capture.
+
+        :param adapter_number: adapter number
+        :param output_file: PCAP destination file for the capture
+        """
+
+        if not self.is_running():
+            raise QemuError("Packet capture is only available for a launched Qemu")
+
+        try:
+            adapter = self._ethernet_adapters[adapter_number]
+        except KeyError:
+            raise QemuError("Adapter {adapter_number} doesn't exist on Qemu VM '{name}'".format(name=self._name,
+                                                                                                            adapter_number=adapter_number))
+
+        nio = adapter.get_nio(0)
+
+        if not nio:
+            raise QemuError("Adapter {} is not connected".format(adapter_number))
+
+        if nio.capturing:
+            raise QemuError("Packet capture is already activated on adapter {adapter_number}".format(adapter_number=adapter_number))
+
+        yield from self._control_vm("host_net_add dump vlan={},file={},name=dump.{}".format(adapter_number, output_file, adapter_number))
+
+        nio.startPacketCapture(output_file)
+        log.info("Qemu VM '{name}' [{id}]: starting packet capture on adapter {adapter_number}".format(name=self._name,
+                                                                                                             id=self._id,
+                                                                                                             adapter_number=adapter_number))
+
+    @asyncio.coroutine
+    def stop_capture(self, adapter_number):
+        """
+        Stops a packet capture.
+
+        :param adapter_number: adapter number
+        """
+
+        try:
+            adapter = self._ethernet_adapters[adapter_number]
+        except KeyError:
+            raise QemuError("Adapter {adapter_number} doesn't exist on Qemu VM '{name}'".format(name=self._name,
+                                                                                                            adapter_number=adapter_number))
+
+        nio = adapter.get_nio(0)
+
+        if not nio:
+            raise QemuError("Adapter {} is not connected".format(adapter_number))
+
+        yield from self._control_vm("host_net_remove {} dump.{}".format(adapter_number, adapter_number))
+        nio.stopPacketCapture()
+
+        log.info("Qemu VM '{name}' [{id}]: stopping packet capture on adapter {adapter_number}".format(name=self._name,
+                                                                                                             id=self._id,
+                                                                                                             adapter_number=adapter_number))
+
     def command(self):
         """
         Returns the QEMU command line.

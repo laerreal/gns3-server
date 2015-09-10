@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import os
 from aiohttp.web import HTTPConflict
 from ...web.route import Route
 from ...schemas.nio import NIO_SCHEMA
@@ -22,6 +23,7 @@ from ...schemas.qemu import QEMU_CREATE_SCHEMA
 from ...schemas.qemu import QEMU_UPDATE_SCHEMA
 from ...schemas.qemu import QEMU_OBJECT_SCHEMA
 from ...schemas.qemu import QEMU_BINARY_LIST_SCHEMA
+from ...schemas.qemu import QEMU_CAPTURE_SCHEMA
 from ...modules.qemu import Qemu
 
 
@@ -274,6 +276,53 @@ class QEMUHandler:
         qemu_manager = Qemu.instance()
         vm = qemu_manager.get_vm(request.match_info["vm_id"], project_id=request.match_info["project_id"])
         yield from vm.adapter_remove_nio_binding(int(request.match_info["adapter_number"]))
+        response.set_status(204)
+
+    @classmethod
+    @Route.post(
+        r"/projects/{project_id}/qemu/vms/{vm_id}/adapters/{adapter_number:\d+}/ports/{port_number:\d+}/start_capture",
+        parameters={
+            "project_id": "UUID for the project",
+            "vm_id": "UUID for the instance",
+            "adapter_number": "Adapter to start a packet capture",
+            "port_number": "Port on the adapter (always 0)"
+        },
+        status_codes={
+            200: "Capture started",
+            400: "Invalid request",
+            404: "Instance doesn't exist"
+        },
+        description="Start a packet capture on a Qemu VM instance",
+        input=QEMU_CAPTURE_SCHEMA)
+    def start_capture(request, response):
+
+        qemu_manager = Qemu.instance()
+        vm = qemu_manager.get_vm(request.match_info["vm_id"], project_id=request.match_info["project_id"])
+        adapter_number = int(request.match_info["adapter_number"])
+        pcap_file_path = os.path.join(vm.project.capture_working_directory(), request.json["capture_file_name"])
+        yield from vm.start_capture(adapter_number, pcap_file_path)
+        response.json({"pcap_file_path": pcap_file_path})
+
+    @classmethod
+    @Route.post(
+        r"/projects/{project_id}/qemu/vms/{vm_id}/adapters/{adapter_number:\d+}/ports/{port_number:\d+}/stop_capture",
+        parameters={
+            "project_id": "UUID for the project",
+            "vm_id": "UUID for the instance",
+            "adapter_number": "Adapter to stop a packet capture",
+            "port_number": "Port on the adapter (always 0)"
+        },
+        status_codes={
+            204: "Capture stopped",
+            400: "Invalid request",
+            404: "Instance doesn't exist"
+        },
+        description="Stop a packet capture on a Qemu VM instance")
+    def stop_capture(request, response):
+
+        qemu_manager = Qemu.instance()
+        vm = qemu_manager.get_vm(request.match_info["vm_id"], project_id=request.match_info["project_id"])
+        yield from vm.stop_capture(int(request.match_info["adapter_number"]))
         response.set_status(204)
 
     @classmethod
