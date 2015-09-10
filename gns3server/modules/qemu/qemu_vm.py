@@ -870,6 +870,15 @@ class QemuVM(BaseVM):
         if nio.capturing:
             raise QemuError("Packet capture is already activated on adapter {adapter_number}".format(adapter_number=adapter_number))
 
+        """
+        Create empty file if no file exists with the required name.
+        Else Wireshark may not auto start because of Qemu may not
+        create file in the time GUI client receives response and
+        continues its work.
+        """
+        if not os.path.isfile(output_file):
+            os.mknod(output_file)
+
         yield from self._control_vm("host_net_add dump vlan={},file={},name=dump.{}".format(adapter_number, output_file, adapter_number))
 
         nio.startPacketCapture(output_file)
