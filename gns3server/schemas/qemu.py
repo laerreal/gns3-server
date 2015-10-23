@@ -356,3 +356,18 @@ QEMU_BINARY_LIST_SCHEMA = {
     },
     "additionalProperties": False,
 }
+
+QEMU_STAUS_SCHEMA = {
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "description": "Request status of qemu VM",
+    "type": "object",
+    "properties": {
+        "status": {
+            "description": "Status of qemu VM",
+            "type": "string",
+            "minLength": 1,
+        },
+    },
+    "required": ["status"],
+    "additionalProperties": False,
+}

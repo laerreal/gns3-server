@@ -24,6 +24,7 @@ from ...schemas.qemu import QEMU_UPDATE_SCHEMA
 from ...schemas.qemu import QEMU_OBJECT_SCHEMA
 from ...schemas.qemu import QEMU_BINARY_LIST_SCHEMA
 from ...schemas.qemu import QEMU_CAPTURE_SCHEMA
+from ...schemas.qemu import QEMU_STAUS_SCHEMA
 from ...modules.qemu import Qemu
 
 
@@ -339,3 +340,32 @@ class QEMUHandler:
 
         binaries = yield from Qemu.binary_list()
         response.json(binaries)
+
+    @classmethod
+    @Route.get(
+        r"/projects/{project_id}/qemu/vms/{vm_id}/status",
+        parameters={
+            "project_id": "UUID for the project",
+            "vm_id": "UUID for the instance"
+        },
+        status_codes={
+            200: "Success",
+            400: "Invalid request",
+            404: "Instance doesn't exist"
+        },
+        description="Get Qemu VM status",
+        output=QEMU_STAUS_SCHEMA
+        )
+    def get_status(request, response):
+        
+        qemu_manger = Qemu.instance()
+        vm = qemu_manger.get_vm(request.match_info["vm_id"], project_id=request.match_info["project_id"])
+        if not vm.is_running():
+            status = "process-not-running"
+        else:
+            status = yield from vm.get_vm_status()
+            if (status == None):
+                status = "None"
+        response.json({"status": status})
+        
+        

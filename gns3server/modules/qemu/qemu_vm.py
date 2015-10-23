@@ -697,7 +697,7 @@ class QemuVM(BaseVM):
         yield from self.stop()
 
     @asyncio.coroutine
-    def _get_vm_status(self):
+    def get_vm_status(self):
         """
         Returns this VM suspend status.
 
@@ -715,7 +715,7 @@ class QemuVM(BaseVM):
         ])
         if result is None:
             return result
-        return result.rsplit(' ', 1)[1]
+        return result.split(' ',3)[2]
 
     @asyncio.coroutine
     def suspend(self):
@@ -724,7 +724,7 @@ class QemuVM(BaseVM):
         """
 
         if self.is_running():
-            vm_status = yield from self._get_vm_status()
+            vm_status = yield from self.get_vm_status()
             if vm_status is None:
                 raise QemuError("Suspending a QEMU VM is not supported")
             elif vm_status == "running":
@@ -748,7 +748,7 @@ class QemuVM(BaseVM):
         Resumes this QEMU VM.
         """
 
-        vm_status = yield from self._get_vm_status()
+        vm_status = yield from self.get_vm_status()
         if vm_status is None:
             raise QemuError("Resuming a QEMU VM is not supported")
         elif vm_status == "paused":
