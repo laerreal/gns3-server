@@ -28,6 +28,7 @@ import shlex
 import asyncio
 import socket
 
+from pkg_resources import parse_version
 from .qemu_error import QemuError
 from ..adapters.ethernet_adapter import EthernetAdapter
 from ..nios.nio_udp import NIOUDP
@@ -587,7 +588,7 @@ class QemuVM(BaseVM):
                 log.error("Could not start QEMU {}: {}\n{}".format(self.qemu_path, e, stdout))
                 raise QemuError("Could not start QEMU {}: {}\n{}".format(self.qemu_path, e, stdout))
 
-            self._set_process_priority()
+            yield from self._set_process_priority()
             if self._cpu_throttling:
                 self._set_cpu_throttling()
 
@@ -602,7 +603,7 @@ class QemuVM(BaseVM):
             log.info('Stopping QEMU VM "{}" PID={}'.format(self._name, self._process.pid))
             try:
                 self._process.terminate()
-                self._process.wait()
+                yield from self._process.wait()
             except subprocess.TimeoutExpired:
                 try:
                     self._process.kill()
@@ -610,6 +611,8 @@ class QemuVM(BaseVM):
                     log.error("Cannot stop the Qemu process: {}".format(e))
                 if self._process.returncode is None:
                     log.warn('QEMU VM "{}" with PID={} is still running'.format(self._name, self._process.pid))
+            except ProcessLookupError:
+                pass
         self._process = None
         self._started = False
         self._stop_cpulimit()
@@ -662,10 +665,18 @@ class QemuVM(BaseVM):
         """
 
         log.debug('QEMU VM "{name}" [{id}] is closing'.format(name=self._name, id=self._id))
-        yield from self.stop()
+
         if self._console:
             self._manager.port_manager.release_tcp_port(self._console, self._project)
             self._console = None
+
+        for adapter in self._ethernet_adapters:
+            if adapter is not None:
+                for nio in adapter.ports.values():
+                    if nio and isinstance(nio, NIOUDP):
+                        self.manager.port_manager.release_udp_port(nio.lport, self._project)
+
+        yield from self.stop()
 
     @asyncio.coroutine
     def _get_vm_status(self):
@@ -1055,10 +1066,19 @@ class QemuVM(BaseVM):
 
         return options
 
+    @asyncio.coroutine
     def _network_options(self):
 
         network_options = []
         network_options.extend(["-net", "none"])  # we do not want any user networking back-end if no adapter is connected.
+
+        patched_qemu = False
+        if self._legacy_networking:
+            version = yield from self.manager.get_qemu_version(self.qemu_path)
+            if version and parse_version(version) < parse_version("1.1.0"):
+                # this is a patched Qemu if version is below 1.1.0
+                patched_qemu = True
+
         for adapter_number, adapter in enumerate(self._ethernet_adapters):
             # TODO: let users specify a base mac address
             mac = "00:00:ab:%s:%s:%02x" % (self.id[-4:-2], self.id[-2:], adapter_number)
@@ -1073,11 +1093,21 @@ class QemuVM(BaseVM):
                 elif self._legacy_networking:
                     # legacy QEMU networking syntax for UDP and TAP
                     if isinstance(nio, NIOUDP):
-                        network_options.extend(["-net", "udp,vlan={},name=gns3-{},sport={},dport={},daddr={}".format(adapter_number,
-                                                                                                                     adapter_number,
-                                                                                                                     nio.lport,
-                                                                                                                     nio.rport,
-                                                                                                                     nio.rhost)])
+                        if patched_qemu:
+                            # use patched Qemu syntax
+                            network_options.extend(["-net", "udp,vlan={},name=gns3-{},sport={},dport={},daddr={}".format(adapter_number,
+                                                                                                                         adapter_number,
+                                                                                                                         nio.lport,
+                                                                                                                         nio.rport,
+                                                                                                                         nio.rhost)])
+                        else:
+                            # use UDP tunnel support added in Qemu 1.1.0
+                            network_options.extend(["-net", "socket,vlan={},name=gns3-{},udp={}:{},localaddr={}:{}".format(adapter_number,
+                                                                                                                           adapter_number,
+                                                                                                                           nio.rhost,
+                                                                                                                           nio.rport,
+                                                                                                                           self._host,
+                                                                                                                           nio.lport)])
                     elif isinstance(nio, NIOTAP):
                         network_options.extend(["-net", "tap,name=gns3-{},ifname={}".format(adapter_number, nio.tap_device)])
 
@@ -1118,8 +1148,7 @@ class QemuVM(BaseVM):
         command = [self.qemu_path]
         command.extend(["-name", self._name])
         command.extend(["-m", str(self._ram)])
-        disk_options = yield from self._disk_options()
-        command.extend(disk_options)
+        command.extend((yield from self._disk_options()))
         command.extend(self._linux_boot_options())
         command.extend(self._serial_options())
         command.extend(self._monitor_options())
@@ -1129,7 +1158,7 @@ class QemuVM(BaseVM):
                 command.extend(shlex.split(additional_options))
             except ValueError as e:
                 QemuError("Invalid additional options: {} error {}".format(additional_options, e))
-        command.extend(self._network_options())
+        command.extend((yield from self._network_options()))
         command.extend(self._graphic())
         return command
 

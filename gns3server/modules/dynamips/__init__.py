@@ -27,13 +27,14 @@ import socket
 import time
 import asyncio
 import tempfile
-import glob
 import logging
+import glob
 
 log = logging.getLogger(__name__)
 
 from gns3server.utils.interfaces import get_windows_interfaces
 from gns3server.utils.asyncio import wait_run_in_executor
+from gns3server.utils.glob import glob_escape
 from pkg_resources import parse_version
 from uuid import UUID, uuid4
 from ..base_manager import BaseManager
@@ -115,6 +116,43 @@ class Dynamips(BaseManager):
         self._devices = {}
         self._ghost_files = set()
         self._dynamips_path = None
+        self._dynamips_ids = {}
+
+    def get_dynamips_id(self, project_id):
+        """
+        :param project_id: UUID of the project
+        :returns: a free dynamips id
+        """
+        self._dynamips_ids.setdefault(project_id, set())
+        dynamips_id = 0
+        for dynamips_id in range(1, 4097):
+            if dynamips_id not in self._dynamips_ids[project_id]:
+                self._dynamips_ids[project_id].add(dynamips_id)
+                return dynamips_id
+        raise DynamipsError("Maximum number of Dynamips instances reached")
+
+    def take_dynamips_id(self, project_id, dynamips_id):
+        """
+        Reserve a dynamips id or raise an error
+
+        :param project_id: UUID of the project
+        :param dynamips_id: Asked id
+        """
+        self._dynamips_ids.setdefault(project_id, set())
+        if dynamips_id in self._dynamips_ids[project_id]:
+            raise DynamipsError("Dynamips identifier {} is already used by another router".format(dynamips_id))
+        self._dynamips_ids[project_id].add(dynamips_id)
+
+    def release_dynamips_id(self, project_id, dynamips_id):
+        """
+        A dynamips id can be reused by another vm
+
+        :param project_id: UUID of the project
+        :param dynamips_id: Asked id
+        """
+        self._dynamips_ids.setdefault(project_id, set())
+        if dynamips_id in self._dynamips_ids[project_id]:
+            self._dynamips_ids[project_id].remove(dynamips_id)
 
     @asyncio.coroutine
     def unload(self):
@@ -164,17 +202,14 @@ class Dynamips(BaseManager):
 
         :param project: Project instance
         """
-
         yield from super().project_closed(project)
         # delete useless Dynamips files
         project_dir = project.module_working_path(self.module_name.lower())
-        files = glob.glob(os.path.join(project_dir, "*.ghost"))
-        files += glob.glob(os.path.join(project_dir, "*_lock"))
-        files += glob.glob(os.path.join(project_dir, "ilt_*"))
-        files += glob.glob(os.path.join(project_dir, "c[0-9][0-9][0-9][0-9]_i[0-9]*_rommon_vars"))
-        files += glob.glob(os.path.join(project_dir, "c[0-9][0-9][0-9][0-9]_i[0-9]*_ssa"))
-        files += glob.glob(os.path.join(project_dir, "c[0-9][0-9][0-9][0-9]_i[0-9]*_log.txt"))
-        files += glob.glob(os.path.join(project_dir, "c[0-9][0-9][0-9][0-9]_i[0-9]*_bootflash"))
+        files = glob.glob(os.path.join(glob_escape(project_dir), "*.ghost"))
+        files += glob.glob(os.path.join(glob_escape(project_dir), "*_lock"))
+        files += glob.glob(os.path.join(glob_escape(project_dir), "ilt_*"))
+        files += glob.glob(os.path.join(glob_escape(project_dir), "c[0-9][0-9][0-9][0-9]_i[0-9]*_rommon_vars"))
+        files += glob.glob(os.path.join(glob_escape(project_dir), "c[0-9][0-9][0-9][0-9]_i[0-9]*_log.txt"))
         for file in files:
             try:
                 log.debug("Deleting file {}".format(file))
@@ -184,6 +219,11 @@ class Dynamips(BaseManager):
             except OSError as e:
                 log.warn("Could not delete file {}: {}".format(file, e))
                 continue
+
+        # Release the dynamips ids if we want to reload the same project
+        # later
+        if project.id in self._dynamips_ids:
+            del self._dynamips_ids[project.id]
 
     @asyncio.coroutine
     def project_moved(self, project):
@@ -359,7 +399,10 @@ class Dynamips(BaseManager):
         ghost_ios_support = self.config.get_section_config("Dynamips").getboolean("ghost_ios_support", True)
         if ghost_ios_support:
             with (yield from Dynamips._ghost_ios_lock):
-                yield from self._set_ghost_ios(vm)
+                try:
+                    yield from self._set_ghost_ios(vm)
+                except GeneratorExit:
+                    log.warning("Could not create ghost IOS image {} (GeneratorExit)".format(vm.name))
 
     @asyncio.coroutine
     def create_nio(self, node, nio_settings):
