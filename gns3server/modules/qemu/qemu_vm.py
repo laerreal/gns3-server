@@ -628,7 +628,10 @@ class QemuVM(BaseVM):
         :returns: result of the command (matched object or None)
         """
 
+        #log.info("QEMU monitor command: {}".format(command))
+
         result = None
+        prompt = False
         if self.is_running() and self._monitor:
             log.debug("Execute QEMU monitor command: {}".format(command))
             try:
@@ -649,13 +652,28 @@ class QemuVM(BaseVM):
                         line = yield from reader.readline()
                         if not line:
                             break
+                        if not prompt and b"(qemu)" in line:
+                            prompt = True
                         for expect in expected:
                             if expect in line:
                                 result = line.decode("utf-8").strip()
                                 break
                 except EOFError as e:
                     log.warn("Could not read from QEMU monitor: {}".format(e))
+            # Wait till Qemu prompt next command
+            try:
+                while not prompt:
+                    line = yield from reader.readline()
+                    # log.info("line = {}".format(line.decode("utf-8").strip()))
+                    if not line:
+                        break
+                    if b"(qemu)" in line:
+                        prompt = True
+            except EOFError as e:
+                log.warn("Could not read from QEMU monitor: {}".format(e))
             writer.close()
+
+        #log.info("QEMU monitor command result: {}".format(result))
         return result
 
     @asyncio.coroutine
